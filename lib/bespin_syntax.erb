@@ -1,0 +1,41 @@
+"define metadata";
+({
+    "depends": [ "SyntaxManager" ],
+    "provides": [
+        {
+            "ep": "syntax",
+            "name": "<%=name%>",
+            "pointer": "#<%=pointer%>"
+        }
+    ]
+});
+"end";
+
+var SC = require('sproutcore/runtime').SC;
+var Promise = require('bespin:promise').Promise;
+var StandardSyntax = require('SyntaxManager:controllers/standardsyntax').
+    StandardSyntax;
+
+exports.<%=pointer%> = StandardSyntax.create({
+    states: {
+<%states.values.each_with_index do |state, index|-%>
+      <%=state.name%>: [
+<%state.patterns.each_with_index do |pattern, index2|-%>
+            {
+                regex: /<%=pattern.regex%>/,
+                tag: '<%=pattern.tag%>'<%if pattern['then']-%>,
+                then: '<%=pattern['then']%>'<%end-%>
+            },<%#=((index2+1) < state.patterns.length) ? ',' : ''%>
+<%end-%>
+            {
+                regex:  /^[^'"\/ \tA-Za-z0-9_]+/,
+                tag:    '<%=state.default_tag%>'
+            },
+            {
+                regex:  /^.+?\b/,
+                tag:    '<%=state.default_tag%>'
+            }
+      ]<%=((index+1) < states.length) ? ',' : ''%>
+<%end-%>
+  }
+});
