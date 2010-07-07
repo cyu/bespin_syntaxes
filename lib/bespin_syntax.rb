@@ -1,13 +1,22 @@
 require 'erubis'
 require 'hashie'
 
+class BespinSyntax < Hashie::Mash
 
-class BespinSyntax
-  attr_accessor :name, :pointer
-  attr_reader :states
+  def short_name
+    fileTypes.first
+  end
 
-  def initialize
-    @states = {}
+  def file_types
+    j(fileTypes)
+  end
+
+  def repositories
+    j(repository)
+  end
+
+  def patterns
+    j(self['patterns'])
   end
 
   def render
@@ -16,21 +25,8 @@ class BespinSyntax
     eruby.result(binding())
   end
 
-  def state(nm, default_tag = 'plain')
-    @states[nm] ||= State.new(nm, default_tag)
-  end
-end
-
-class State
-  attr_accessor :name, :patterns, :default_tag
-
-  def initialize(name, default_tag)
-    @name         = name
-    @default_tag  = default_tag
-    @patterns     = []
-  end
-
-  def <<(pattern)
-    patterns << Hashie::Mash.new(pattern)
-  end
+  protected
+    def j(h)
+      Yajl::Encoder.encode(h, :pretty => true)
+    end
 end

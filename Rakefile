@@ -1,6 +1,7 @@
-require 'lib/tm2bespin_syntax_converter'
+require 'lib/converter'
 
-task :convert do
-  converter = Tm2bespinSyntaxConverter.new(ENV['OUTPUT_DIR'] || '.')
-  Dir.glob('syntax/*.syntax') { |f| converter.convert(f) }
+task :convert, :output_dir do |cmd, args|
+  converter = Converter.new(args[:output_dir] || '.')
+  Dir.glob('syntax/ruby.syntax') { |f| converter.convert(f) }
+  cp 'js/textmate_syntax.js', args[:output_dir]
 end

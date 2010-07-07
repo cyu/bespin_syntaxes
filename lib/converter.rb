@@ -1,39 +1,21 @@
 require "#{File.dirname(__FILE__)}/bespin_syntax"
-require 'textpow'
+require 'yaml'
+require 'yajl'
 
-class Tm2bespinSyntaxConverter
+class Converter
 
-  attr_reader :bespin_syntax, :tag_mappings, :output_dir
+  attr_reader :output_dir
 
   def initialize(output_dir)
-    @output_dir   = output_dir
-    @tag_mappings = [
-      [/punctuation\.definition\.comment\./, 'comment'   ],
-      [/storage\.type\./                   , 'directive' ],
-      [/(keyword|storage)\./               , 'keyword'   ],
-      [/support\.type\.built-ins\./        , 'identifier'],
-      [/punctuation\.definition\.string\./ , 'string'    ]
-    ]
+    @output_dir = output_dir
   end
 
   def convert(fn)
-    tm_syntax  = Textpow::SyntaxNode.load(fn)
-    class_name = "#{tm_syntax.name}Syntax"
+    @syn = BespinSyntax.new(YAML.load_file(fn))
+    file = File.join(output_dir, "#{@syn['name'].downcase}.js")
 
-    @bespin_syntax = BespinSyntax.new
-    bespin_syntax.name    = tm_syntax.fileTypes.first
-    bespin_syntax.pointer = class_name
-
-    start_state = bespin_syntax.state('start')
-    tm_syntax.patterns.each do |pattern|
-      if pattern.respond_to?(:proxy)
-        pattern.patterns.each { |p| convert_pattern(start_state, p) }
-      else
-        convert_pattern(start_state, pattern)
-      end
-    end
-
-    File.open(File.join(output_dir, "#{class_name}.js"), 'w') { |f| f.write(bespin_syntax.render) }
+    puts "writing to #{file}..."
+    File.open(file, 'w') { |f| f.write(@syn.render) }
   end
 
   protected
