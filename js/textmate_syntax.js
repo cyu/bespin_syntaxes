@@ -238,8 +238,31 @@ var Segment = function(fullState, line, col) {
 
 Segment.prototype = {
     parentState:function() {
-        var s = this.state.slice(0, this.state.length-2).join(':');
+        return this.state.toArray().slice(0, this.state.size() - 1);
+    },
+    parentStateString:function() {
+        var s = this.parentState().join(':');
         return (s == '') ? 'start' : s;
+    }
+};
+
+var CapturesMatch = function(name, end, captures) {
+    this.name = name;
+    this.end = end;
+    this.captures = captures;    
+};
+
+CapturesMatch.prototype = {
+    nextState:function(segment) {
+        var output = _(this.captures).map(function(v){
+            return [v.tag, v.index, v.end].join(',');
+        });
+
+        output.unshift((this.name ? this.name : '') + ',' + this.end);
+        
+        var nextState = segment.parentState();
+        nextState.push('$' + output.join('|'));
+        return nextState.join(':');
     }
 };
 
@@ -247,10 +270,21 @@ exports.TextmateSyntax = function(repositories, patterns) {
     this.repositories = repositories;
     this.patterns = patterns;
 
-    this.lookups = {};
+    this._lookups = {};
     _(this.patterns).each(function(pattern) {
-        if (pattern.hasOwnProperty('name'))
-            this.lookups[pattern.name] = pattern;
+        if (pattern.hasOwnProperty('name')) {
+            var lookup = this._lookups[pattern.name];
+            if (lookup) {
+                if (!_.isArray(lookup)) {
+                    lookup._path = pattern.name + '[0]';
+                    this._lookups[pattern.name] = lookup = [lookup];
+                }
+                pattern._path = pattern.name + '[' + lookup.length + ']';
+                lookup.push(pattern);
+            } else {
+                this._lookups[pattern.name] = pattern;
+            }
+        }
     }, this);
 };
 
@@ -271,23 +305,76 @@ exports.TextmateSyntax.prototype = {
         if (seg.state.last() == 'start') {
             result = this._processPatterns(this.patterns, seg, token);
 
+        } else if (seg.state.last().charAt(0) == '$') {
+            var splitData = seg.state.last().substring(1).split('|');
+            var nameEnd = splitData.shift().split(',');
+            var captures = _(splitData).map(function(v){
+                var arr = v.split(',');
+                return {
+                    tag: arr[0],
+                    index: arr[1],
+                    end: arr[2]
+                };
+            });
+            var capturesMatch = new CapturesMatch(
+                nameEnd[0] == '' ? null : nameEnd[0],
+                Number(nameEnd[1]), captures);
+            
+            var captureResult = this._processCaptures(capturesMatch, seg, token);
+            result = { state: [ seg.context, captureResult.nextState ], token: token };
+
         } else {
-            var pattern = this.lookups[seg.state.last()];
-            var regex = this._regex(pattern, 'end');
-            var match = regex.exec(seg.str);
-            console.debug('end: ' + pattern.name);
-            if (!match || match.index > seg.wordBegin) {
-                var subpatterns = _(_(pattern.patterns).map(function(pattern){
-                    if (pattern.hasOwnProperty('include')) {
-                        if (pattern.include == '$base' || pattern.include == '$self')
-                            return this.patterns;
-                        else
-                            return this.repositories[pattern.include];
-                    } else {
-                        return pattern;
+            var patternPath = seg.state.last().split('@');
+            var pattern = null;
+            if (patternPath.length > 1) {
+                var repoPatterns = this.repositories[patternPath[0]].patterns;
+                pattern = repoPatterns[Number(patternPath[1])];
+            } else {
+                var arrayMatch = patternPath[0].match(/^(.*?)\[(\d+)\]/);
+                if (arrayMatch) {
+                    pattern = this._lookups[arrayMatch[1]][Number(arrayMatch[2])];
+                } else {
+                    pattern = this._lookups[patternPath[0]];
+                }
+            }
+
+            if (pattern) {
+                if (pattern.hasOwnProperty('end')) {
+                    var regex = this._regex(pattern, 'end');
+                    var match = regex.exec(seg.str);
+                    console.debug('  > end: ' + pattern.name + ' ' + JSON.stringify(pattern.patterns));
+                    if (!match || match.index > seg.wordBegin) {
+                        var subpatterns = _(pattern.patterns).chain().map(function(pattern){
+                            if (pattern.hasOwnProperty('include')) {
+                                if (pattern.include == '$base' || pattern.include == '$self')
+                                    return this.patterns;
+                                else {
+                                    var repoName = pattern.include.substring(1);
+                                    var repo = this.repositories[repoName];
+                                    if (repo.hasOwnProperty('patterns') &&
+                                            !repo.hasOwnProperty('match') &&
+                                            !repo.hasOwnProperty('begin')) {
+                                        _(repo.patterns).each(function(v, i){
+                                            if (v._processed) _.breakLoop();
+                                            v._path = repoName + '@' + i;
+                                            v._processed = true;
+                                        });
+                                        return repo.patterns;
+                                    } else {
+                                        return repo;
+                                    }
+                                }
+                            } else {
+                                return pattern;
+                            }
+                        }, this).flatten().value();
+                        result = this._processPatterns(subpatterns, seg, token);
                     }
-                }, this)).flatten();
-                result = this._processPatterns(subpatterns, seg, token);
+                } else {
+                    console.debug('no end regex found for nested state: ' + JSON.stringify(pattern));
+                }
+            } else {
+                console.debug('pattern not found for nested state: ' + seg.state.last());
             }
 
             if (!result && match) {
@@ -300,11 +387,9 @@ exports.TextmateSyntax.prototype = {
                     token.tag = pattern.name;
                 }
 
-                result = { state: [ seg.context, seg.parentState() ], token: token };
+                result = { state: [ seg.context, seg.parentStateString() ], token: token };
             }
         }
-
-
 
         if (result && result.token && result.token.tag) {
             var tag = result.token.tag;
@@ -315,61 +400,115 @@ exports.TextmateSyntax.prototype = {
                 }
             }
             
-            /*var debug = [result.token.tag, ': ', line.substring(result.token.start, result.token.end)];
-            if (tag != result.token.tag) debug = debug.concat([' (', tag, ')']);
-            console.debug(debug.join(''));*/
             if (tag == result.token.tag) result.token.tag = 'plain';
+            
+            var debug = [
+                line.substring(result.token.start, result.token.end),
+                result.token.tag, tag, result.state[1]
+            ];
+            console.debug(JSON.stringify(debug));
         }
 
         return result;
     },
 
-    _processPatterns:function(patterns, seg, token) {
-        var result = null;
+    _closestStartPattern:function(patterns, seg) {
+        var closest = null;
         _(patterns).each(function(pattern) {
-            if (pattern.hasOwnProperty('match')) {
-                var regex = this._regex(pattern, 'match');
+            var regex = null;
+            if (pattern.hasOwnProperty('match'))
+                regex = this._regex(pattern, 'match');
+            else if (pattern.hasOwnProperty('begin'))
+                regex = this._regex(pattern, 'begin');
 
+            if (regex) {
                 var match = regex.exec(seg.str);
-                if (match == null || match.index > seg.wordBegin) return;
-
-                var len = match[0].length;
-                token.end = seg.col + match.index + len;
-                token.tag = pattern.name;
-
-                var nextState, newContext = null;
-                if (pattern.hasOwnProperty('then')) {
-                    var then = alt.then.split(" ");
-                    nextState = [ seg.context, then[0] ];
-                    if (then.length > 1) {
-                        newContext = then[1].split(":");
+                if (match != null) {
+                    if (match.index <= seg.wordBegin) {
+                        closest = { pattern: pattern, match: match };
+                        _.breakLoop();
+    
+                    } else if (closest == null || match.index < closest.match.index) {
+                        closest = { pattern: pattern, match: match };
                     }
+                }
+            }
+        }, this);
 
-                } else if (len == 0) {
+        return closest;
+    },
+
+    _processPatterns:function(patterns, seg, token) {
+        var result, nextState = null;
+        var closest = this._closestStartPattern(patterns, seg);
+
+        if (closest != null) {        
+            var pattern = closest.pattern;
+            var match = closest.match;
+    
+            if (match.index > seg.wordBegin) {
+                token.end = seg.col + match.index;
+                token.tag = (seg.state.last() == 'start') ? 'plain' : seg.state.last();
+    
+                result = { state: seg.fullState, token: token };
+    
+            } else if (pattern.hasOwnProperty('match')) {
+                var len = 0;
+                if (pattern.hasOwnProperty('captures')) {
+                    var pos = 0;
+                    var captures = _(pattern.captures).
+                            chain().keys().
+                            sortBy(function(v){ return Number(v); }).
+                            map(function(v){
+                                var groupNum = Number(v);
+                                var capture = pattern.captures[v];
+                                var index = seg.str.indexOf(match[groupNum], pos);
+                                if (index >= 0) {
+                                    pos = index + match[groupNum].length;
+                                    return {
+                                        index: seg.col + index,
+                                        end: seg.col + index + match[groupNum].length,
+                                        tag: capture.name
+                                    };
+                                }
+                                return null;
+                            }).compact();
+                    
+                    var capturesMatch = new CapturesMatch(
+                            pattern.name,
+                            seg.col + match.index + match[0].length,
+                            captures.value());
+
+                    var captureResult = this._processCaptures(capturesMatch, seg, token);
+                    len = captureResult.len;
+                    nextState = [ seg.context, captureResult.nextState ];
+                    
+                } else {
+                    len = match[0].length;
+                    token.end = seg.col + match.index + len;
+                    token.tag = pattern.name;
+                }
+
+                if (len == 0)
                     throw new Error("TextmateSyntax: Infinite loop detected: " +
                             "zero-length match that didn't change state");
 
-                } else {
+                if (nextState == null)
                     nextState = seg.fullState;
-                }
-                    
+
                 result = { state: nextState, token: token };
-                if (newContext != null) {
-                    result.newContext = newContext;
-                }
-
-                _.breakLoop();
-
+    
             } else if (pattern.hasOwnProperty('begin')) {
                 var regex = this._regex(pattern, 'begin');
-
+    
                 var match = regex.exec(seg.str);
-                if (match) console.debug('begin: ' + pattern.name + ' [' + match.index + ']');
                 if (match == null || match.index > seg.wordBegin) return;
+                
+                console.debug('  > begin: ' + JSON.stringify(pattern));
                 
                 var len = match[0].length;
                 token.end = seg.col + match.index + len;
-
+    
                 var captures = null;
                 if (pattern.hasOwnProperty('beginCaptures'))
                     captures = pattern.beginCaptures;
@@ -380,21 +519,70 @@ exports.TextmateSyntax.prototype = {
                     token.tag = captures.hasOwnProperty('1') ? captures['1'].name : captures['0'].name;
                 else
                     token.tag = pattern.name;
+    
+                var nextState = this._nextState(pattern, pattern.name, seg);
 
-                result = { state: [ seg.context, pattern.name ], token: token };
+                result = { state: [ seg.context, nextState ], token: token };
 
-                _.breakLoop();
-            }     
-        }, this);
-
+            } else {
+                console.debug('unsupported pattern: ' + JSON.stringify(pattern));
+            }
+        }
         return result;
     },
 
     _regex:function(pattern, value) {
         var val = pattern[value];
+
+        if (!val)
+            console.debug('regex \'' + value + '\' not found in pattern: ' + JSON.stringify(pattern));
+        
         if (typeof val.global !== 'undefined')
             return val;
         else
             return pattern[value] = new RegExp2(val);
+    },
+
+    _nextState:function(pattern, name, segment) {
+        var nextState = name;
+        if (pattern.hasOwnProperty('_path'))
+            nextState = pattern._path;
+        if (segment.state.last() != 'start')
+            nextState = segment.state.join(':') + ':' + nextState;
+        return nextState;
+    },
+
+    _processCaptures:function(capturesMatch, segment, token) {
+        var len, nextState = null;
+
+        if (capturesMatch.captures.length == 0) {
+            len = capturesMatch.end - segment.col;
+            token.end = capturesMatch.end;
+            token.tag = capturesMatch.name ? capturesMatch.name : 'plain';
+            nextState = segment.parentStateString();
+
+        } else {
+            var first = capturesMatch.captures[0];
+            if ((first.index - segment.col) <= segment.wordBegin) {
+                capturesMatch.captures.shift();
+                len = first.end - first.index;
+                token.end = first.end;
+                token.tag = first.tag;
+            
+            } else {
+                len = first.index - segment.col;
+                token.end = segment.col + first.index;
+                token.tag = capturesMatch.name ? capturesMatch.name : 'plain';
+            }
+
+            if (capturesMatch.captures.length != 0 || token.end < capturesMatch.end) {
+                nextState = capturesMatch.nextState(segment);
+        
+            } else {            
+                nextState = segment.parentStateString();
+            }
+        }
+        
+        return {nextState: nextState, len: len};
     }
 };
