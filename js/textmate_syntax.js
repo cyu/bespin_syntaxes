@@ -7,7 +7,7 @@
         "underscore": "0.0.0",
         "syntax_worker": "0.0.0"
     }
-});
+})
 "end";
 
 var promise = require('bespin:promise');
@@ -293,7 +293,7 @@ exports.TextmateSyntax.prototype = {
     _tagMappings: [
         [/^(comment\.|punctuation\.definition\.comment\.)/, 'comment'],
         [/^(keyword\.|variable\.language\.|constant\.language\.)/, 'keyword'],
-        [/^(string\.|punctuation.definition.string\.)/, 'string'],
+        [/^(string\.|punctuation.definition.string\.)/, 'string']
     ],
 
     get: function(fullState, line, col) {
