@@ -273,7 +273,9 @@ var Segment = function(fullState, line, col) {
     this.context = fullState[0];
     this.state = State.parse(fullState[1]);
     this.str = line.substring(col); // TODO: sticky flag where available
-    this.wordBegin = this.str.match(/[^\s]/).index;
+
+    var m = this.str.match(/[^\s]/);
+    this.wordBegin = m ? m.index : 0;
 };
 
 var CapturesMatch = function(name, end, captures) {
