@@ -1,0 +1,5 @@
+== Syntax Highlight Plugins for Bespin
+
+This project contains Syntax Highlight Plugins for Bespin.  These plugins were generated from TextMate syntax files, and requires a custom syntax engine that is also a part of this project.
+
+This project is currently in active development.  I've only tested this on a small number of files, and the performance isn't as great as I would like, but it's a good start.
