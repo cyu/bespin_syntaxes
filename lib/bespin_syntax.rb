@@ -4,7 +4,7 @@ require 'hashie'
 class BespinSyntax < Hashie::Mash
 
   def short_name
-    fileTypes.first
+    fileTypes ? fileTypes.first : name
   end
 
   def file_types

@@ -1,0 +1,50 @@
+"define metadata";
+({
+    "description": "Python (Django) syntax highlighter",
+    "dependencies": { "textmate_syntax": "0.0.0" },
+    "environments": { "worker": true },
+    "provides": [
+        {
+            "ep": "syntax",
+            "name": "",
+            "pointer": "#Python (Django)Syntax",
+            "fileexts": [
+
+]
+        }
+    ]
+});
+"end";
+
+var Promise = require('bespin:promise').Promise;
+var TextmateSyntax = require('textmate_syntax').TextmateSyntax;
+
+var repositories = null;
+
+var patterns = [
+  {
+    "name": "support.type.django.model",
+    "match": "(meta|models)\\.(ForeignKey|Admin|AutoField|BooleanField|CharField|CommaSeparatedIntegerField|DateField|DateTimeField|EmailField|FileField|FilePathField|FloatField|ImageField|IntegerField|IPAddressField|ManyToManyField|NullBooleanField|OneToOneField|PhoneNumberField|PositiveIntegerField|PositiveSmallIntegerField|SlugField|SmallIntegerField|TextField|TimeField|URLField|USStateField|XMLField)"
+  },
+  {
+    "name": "support.other.django.module",
+    "match": "django(\\.[a-z]+){1,} "
+  },
+  {
+    "name": "variable.other.django.settings",
+    "match": "(ABSOLUTE_URL_OVERRIDES|ADMIN_FOR|ADMIN_MEDIA_PREFIX|ADMINS|ALLOWED_INCLUDE_ROOTS|APPEND_SLASH|CACHE_BACKEND|CACHE_MIDDLEWARE_KEY_PREFIX|CACHE_MIDDLEWARE_SECONDS|DATABASE_ENGINE|DATABASE_HOST|DATABASE_NAME|DATABASE_PASSWORD|DATABASE_PORT|DATABASE_USER|DATE_FORMAT|DATETIME_FORMAT|DEBUG|DEFAULT_CHARSET|DEFAULT_CONTENT_TYPE|DEFAULT_FROM_EMAIL|DISALLOWED_USER_AGENTS|EMAIL_HOST|EMAIL_SUBJECT_PREFIX|IGNORABLE_404_ENDS|IGNORABLE_404_STARTS|INSTALLED_APPS|INTERNAL_IPS|JING_PATH|LANGUAGE_CODE|LANGUAGES|MANAGERS|MEDIA_ROOT|MEDIA_URL|MIDDLEWARE_CLASSES|PREPEND_WWW|ROOT_URLCONF|SECRET_KEY|SEND_BROKEN_LINK_EMAILS|SERVER_EMAIL|SESSION_COOKIE_AGE|SESSION_COOKIE_DOMAIN|SESSION_COOKIE_NAME|SESSION_SAVE_EVERY_REQUEST|SITE_ID|TEMPLATE_DEBUG|TEMPLATE_DIRS|TEMPLATE_FILE_EXTENSION|TEMPLATE_LOADERS|TIME_FORMAT|TIME_ZONE|USE_ETAGS)"
+  },
+  {
+    "name": "support.function.django.view",
+    "match": "(get_list_or_404|get_object_or_404|load_and_render|loader|render_to_response)"
+  },
+  {
+    "name": "support.function.django.model",
+    "match": "[a-z_]+\\.get_(object|list|iterator|count|values|values_iterator|in_bulk)"
+  },
+  {
+    "include": "source.python"
+  }
+];
+
+exports.Python (Django)Syntax = new TextmateSyntax(repositories, patterns);

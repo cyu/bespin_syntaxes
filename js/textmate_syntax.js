@@ -104,7 +104,7 @@ RegExp2.prototype = {
                     var filter = this._filters[i];
 
                     if ((filter.group - nonCaptures) >= m.length)
-                        console.debug('no group $' + (filter.group - nonCaptures) + ': ' + this._source + ' = ' + JSON.stringify(m));
+                        console.error('no group $' + (filter.group - nonCaptures) + ': ' + this._source + ' = ' + JSON.stringify(m));
 
                     if (filter.exec) {
                         try {
@@ -226,24 +226,54 @@ Object.defineProperties(RegExp2.prototype, {
     }
 });
 
+var State = function(stack) {
+    this._stack = stack;
+};
+
+State.parse = function(stateString) {
+    return new State(stateString.split(':'));
+};
+
+State.prototype = {
+    parent:function() {
+        return new State(this._stack.slice(0, this._stack.length - 1));
+    },
+    newState:function(newStateValue) {
+        var newState = this.parent();
+        newState._stack.push(newStateValue);
+        return newState;
+    },
+    nextState:function(nextStateValue) {
+        if (this.isStartState())
+            return new State([nextStateValue]);
+
+        var state = new State(this._stack.slice());
+        state._stack.push(nextStateValue);
+        return state;
+    },
+    current:function() {
+        return (this._stack.length > 0) ? this._stack[this._stack.length - 1] : 'start';
+    },
+    isCaptureState:function() {
+        return this.current().charAt(0) == '$';
+    },
+    isStartState:function() {
+        return this.current() == 'start';
+    },
+    toString:function() {
+        var s = this._stack.join(':');
+        return (s == '') ? 'start' : s;
+    }
+};
+
 var Segment = function(fullState, line, col) {
     this.fullState = fullState;
     this.line = line;
     this.col = col;
     this.context = fullState[0];
-    this.state = _(fullState[1].split(':'));
+    this.state = State.parse(fullState[1]);
     this.str = line.substring(col); // TODO: sticky flag where available
     this.wordBegin = this.str.match(/[^\s]/).index;
-};
-
-Segment.prototype = {
-    parentState:function() {
-        return this.state.toArray().slice(0, this.state.size() - 1);
-    },
-    parentStateString:function() {
-        var s = this.parentState().join(':');
-        return (s == '') ? 'start' : s;
-    }
 };
 
 var CapturesMatch = function(name, end, captures) {
@@ -260,9 +290,7 @@ CapturesMatch.prototype = {
 
         output.unshift((this.name ? this.name : '') + ',' + this.end);
         
-        var nextState = segment.parentState();
-        nextState.push('$' + output.join('|'));
-        return nextState.join(':');
+        return segment.state.newState('$' + output.join('|'));
     }
 };
 
@@ -301,12 +329,12 @@ exports.TextmateSyntax.prototype = {
         var token = { start: col, state: fullState };
         var result = null;
 
-        console.debug('line fragment: ' + seg.str + ', fullState: ' + JSON.stringify(fullState));
-        if (seg.state.last() == 'start') {
+        //console.debug('line fragment: ' + seg.str + ', fullState: ' + JSON.stringify(fullState));
+        if (seg.state.isStartState()) {
             result = this._processPatterns(this.patterns, seg, token);
 
-        } else if (seg.state.last().charAt(0) == '$') {
-            var splitData = seg.state.last().substring(1).split('|');
+        } else if (seg.state.isCaptureState()) {
+            var splitData = seg.state.current().substring(1).split('|');
             var nameEnd = splitData.shift().split(',');
             var captures = _(splitData).map(function(v){
                 var arr = v.split(',');
@@ -321,10 +349,10 @@ exports.TextmateSyntax.prototype = {
                 Number(nameEnd[1]), captures);
             
             var captureResult = this._processCaptures(capturesMatch, seg, token);
-            result = { state: [ seg.context, captureResult.nextState ], token: token };
+            result = { state: [ seg.context, captureResult.nextState.toString() ], token: token };
 
         } else {
-            var patternPath = seg.state.last().split('@');
+            var patternPath = seg.state.current().split('@');
             var pattern = null;
             if (patternPath.length > 1) {
                 var repoPatterns = this.repositories[patternPath[0]].patterns;
@@ -342,7 +370,7 @@ exports.TextmateSyntax.prototype = {
                 if (pattern.hasOwnProperty('end')) {
                     var regex = this._regex(pattern, 'end');
                     var match = regex.exec(seg.str);
-                    console.debug('  > end: ' + pattern.name + ' ' + JSON.stringify(pattern.patterns));
+                    //console.debug('  > end: ' + pattern.name + ' ' + JSON.stringify(pattern.patterns));
                     if (!match || match.index > seg.wordBegin) {
                         var subpatterns = _(pattern.patterns).chain().map(function(pattern){
                             if (pattern.hasOwnProperty('include')) {
@@ -371,10 +399,10 @@ exports.TextmateSyntax.prototype = {
                         result = this._processPatterns(subpatterns, seg, token);
                     }
                 } else {
-                    console.debug('no end regex found for nested state: ' + JSON.stringify(pattern));
+                    console.error('no end regex found for nested state: ' + JSON.stringify(pattern));
                 }
             } else {
-                console.debug('pattern not found for nested state: ' + seg.state.last());
+                console.error('pattern not found for nested state: ' + seg.state.current());
             }
 
             if (!result && match) {
@@ -387,7 +415,7 @@ exports.TextmateSyntax.prototype = {
                     token.tag = pattern.name;
                 }
 
-                result = { state: [ seg.context, seg.parentStateString() ], token: token };
+                result = { state: [ seg.context, seg.state.parent().toString() ], token: token };
             }
         }
 
@@ -402,11 +430,11 @@ exports.TextmateSyntax.prototype = {
             
             if (tag == result.token.tag) result.token.tag = 'plain';
             
-            var debug = [
+            /*var debug = [
                 line.substring(result.token.start, result.token.end),
                 result.token.tag, tag, result.state[1]
             ];
-            console.debug(JSON.stringify(debug));
+            console.debug(JSON.stringify(debug));*/
         }
 
         return result;
@@ -448,40 +476,16 @@ exports.TextmateSyntax.prototype = {
     
             if (match.index > seg.wordBegin) {
                 token.end = seg.col + match.index;
-                token.tag = (seg.state.last() == 'start') ? 'plain' : seg.state.last();
+                token.tag = (seg.state.isStartState()) ? 'plain' : seg.state.current();
     
                 result = { state: seg.fullState, token: token };
     
             } else if (pattern.hasOwnProperty('match')) {
                 var len = 0;
                 if (pattern.hasOwnProperty('captures')) {
-                    var pos = 0;
-                    var captures = _(pattern.captures).
-                            chain().keys().
-                            sortBy(function(v){ return Number(v); }).
-                            map(function(v){
-                                var groupNum = Number(v);
-                                var capture = pattern.captures[v];
-                                var index = seg.str.indexOf(match[groupNum], pos);
-                                if (index >= 0) {
-                                    pos = index + match[groupNum].length;
-                                    return {
-                                        index: seg.col + index,
-                                        end: seg.col + index + match[groupNum].length,
-                                        tag: capture.name
-                                    };
-                                }
-                                return null;
-                            }).compact();
-                    
-                    var capturesMatch = new CapturesMatch(
-                            pattern.name,
-                            seg.col + match.index + match[0].length,
-                            captures.value());
-
-                    var captureResult = this._processCaptures(capturesMatch, seg, token);
+                    var captureResult = this._setupCaptures(pattern, 'captures', match, seg, token);
                     len = captureResult.len;
-                    nextState = [ seg.context, captureResult.nextState ];
+                    nextState = [ seg.context, captureResult.nextState.toString() ];
                     
                 } else {
                     len = match[0].length;
@@ -504,28 +508,33 @@ exports.TextmateSyntax.prototype = {
                 var match = regex.exec(seg.str);
                 if (match == null || match.index > seg.wordBegin) return;
                 
-                console.debug('  > begin: ' + JSON.stringify(pattern));
+                //console.debug('  > begin: ' + JSON.stringify(pattern));
                 
-                var len = match[0].length;
-                token.end = seg.col + match.index + len;
-    
-                var captures = null;
-                if (pattern.hasOwnProperty('beginCaptures'))
-                    captures = pattern.beginCaptures;
-                else if (pattern.hasOwnProperty('captures'))
-                    captures = pattern.captures;
-                
-                if (captures)
-                    token.tag = captures.hasOwnProperty('1') ? captures['1'].name : captures['0'].name;
-                else
-                    token.tag = pattern.name;
-    
-                var nextState = this._nextState(pattern, pattern.name, seg);
+                var nextState = null;
+                if (pattern.hasOwnProperty('beginCaptures')) {
+                    var capturesResult = this._setupCaptures(pattern, 'beginCaptures', match, seg, token);
+                    nextState = this._nextState(pattern, pattern.name, seg);
+                    if (capturesResult.nextState.isCaptureState()) {
+                        nextState = nextState.nextState(capturesResult.nextState.current());
+                    }
 
-                result = { state: [ seg.context, nextState ], token: token };
+                } else {
+                    token.end = seg.col + match.index + match[0].length;
+
+                    if (pattern.hasOwnProperty('captures')) {
+                        token.tag = pattern.captures.hasOwnProperty('1') ?
+                                pattern.captures['1'].name : pattern.captures['0'].name;
+                    } else {
+                        token.tag = pattern.name;
+                    }
+
+                    nextState = this._nextState(pattern, pattern.name, seg);
+                }
+
+                result = { state: [ seg.context, nextState.toString() ], token: token };
 
             } else {
-                console.debug('unsupported pattern: ' + JSON.stringify(pattern));
+                console.error('unsupported pattern: ' + JSON.stringify(pattern));
             }
         }
         return result;
@@ -535,7 +544,7 @@ exports.TextmateSyntax.prototype = {
         var val = pattern[value];
 
         if (!val)
-            console.debug('regex \'' + value + '\' not found in pattern: ' + JSON.stringify(pattern));
+            console.error('regex \'' + value + '\' not found in pattern: ' + JSON.stringify(pattern));
         
         if (typeof val.global !== 'undefined')
             return val;
@@ -544,12 +553,35 @@ exports.TextmateSyntax.prototype = {
     },
 
     _nextState:function(pattern, name, segment) {
-        var nextState = name;
-        if (pattern.hasOwnProperty('_path'))
-            nextState = pattern._path;
-        if (segment.state.last() != 'start')
-            nextState = segment.state.join(':') + ':' + nextState;
-        return nextState;
+        return segment.state.nextState(pattern.hasOwnProperty('_path') ? pattern._path : name);
+    },
+
+    _setupCaptures:function(pattern, capturesName, match, segment, token) {
+        var pos = 0;
+        var captures = _(pattern[capturesName]).
+                chain().keys().
+                sortBy(function(v){ return Number(v); }).
+                map(function(v){
+                    var groupNum = Number(v);
+                    var capture = pattern[capturesName][v];
+                    var index = segment.str.indexOf(match[groupNum], pos);
+                    if (index >= 0) {
+                        pos = index + match[groupNum].length;
+                        return {
+                            index: segment.col + index,
+                            end: segment.col + index + match[groupNum].length,
+                            tag: capture.name
+                        };
+                    }
+                    return null;
+                }).compact();
+
+        var capturesMatch = new CapturesMatch(
+                pattern.name,
+                segment.col + match.index + match[0].length,
+                captures.value());
+
+        return this._processCaptures(capturesMatch, segment, token);
     },
 
     _processCaptures:function(capturesMatch, segment, token) {
@@ -559,7 +591,7 @@ exports.TextmateSyntax.prototype = {
             len = capturesMatch.end - segment.col;
             token.end = capturesMatch.end;
             token.tag = capturesMatch.name ? capturesMatch.name : 'plain';
-            nextState = segment.parentStateString();
+            nextState = segment.state.parent();
 
         } else {
             var first = capturesMatch.captures[0];
@@ -579,7 +611,7 @@ exports.TextmateSyntax.prototype = {
                 nextState = capturesMatch.nextState(segment);
         
             } else {            
-                nextState = segment.parentStateString();
+                nextState = segment.state.parent();
             }
         }
         
