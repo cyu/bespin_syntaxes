@@ -1,4 +1,4 @@
-require 'lib/converter'
+require File.join(File.dirname(__FILE__), 'lib', 'converter')
 
 task :convert, :output_dir do |cmd, args|
   converter = Converter.new(args[:output_dir] || '.')
