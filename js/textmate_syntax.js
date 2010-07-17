@@ -302,18 +302,17 @@ exports.TextmateSyntax = function(repositories, patterns) {
 
     this._lookups = {};
     _(this.patterns).each(function(pattern) {
-        if (pattern.hasOwnProperty('name')) {
-            var lookup = this._lookups[pattern.name];
-            if (lookup) {
-                if (!_.isArray(lookup)) {
-                    lookup._path = pattern.name + '[0]';
-                    this._lookups[pattern.name] = lookup = [lookup];
-                }
-                pattern._path = pattern.name + '[' + lookup.length + ']';
-                lookup.push(pattern);
-            } else {
-                this._lookups[pattern.name] = pattern;
+        var lookupName = pattern.hasOwnProperty('name') ? pattern.name : '__anonymous';
+        var lookup = this._lookups[lookupName];
+        if (lookup) {
+            if (!_.isArray(lookup)) {
+                lookup._path = lookupName + '[0]';
+                this._lookups[lookupName] = lookup = [lookup];
             }
+            pattern._path = lookupName + '[' + lookup.length + ']';
+            lookup.push(pattern);
+        } else {
+            this._lookups[lookupName] = pattern;
         }
     }, this);
 };
@@ -354,51 +353,54 @@ exports.TextmateSyntax.prototype = {
             result = { state: [ seg.context, captureResult.nextState.toString() ], token: token };
 
         } else {
-            var patternPath = seg.state.current().split('@');
-            var pattern = null;
-            if (patternPath.length > 1) {
-                var repoPatterns = this.repositories[patternPath[0]].patterns;
-                pattern = repoPatterns[Number(patternPath[1])];
-            } else {
-                var arrayMatch = patternPath[0].match(/^(.*?)\[(\d+)\]/);
-                if (arrayMatch) {
-                    pattern = this._lookups[arrayMatch[1]][Number(arrayMatch[2])];
-                } else {
-                    pattern = this._lookups[patternPath[0]];
-                }
-            }
-
+            var pattern = this._lookupPattern(seg.state);
             if (pattern) {
                 if (pattern.hasOwnProperty('end')) {
                     var regex = this._regex(pattern, 'end');
                     var match = regex.exec(seg.str);
                     //console.debug('  > end: ' + pattern.name + ' ' + JSON.stringify(pattern.patterns));
                     if (!match || match.index > seg.wordBegin) {
-                        var subpatterns = _(pattern.patterns).chain().map(function(pattern){
-                            if (pattern.hasOwnProperty('include')) {
-                                if (pattern.include == '$base' || pattern.include == '$self')
-                                    return this.patterns;
-                                else {
-                                    var repoName = pattern.include.substring(1);
-                                    var repo = this.repositories[repoName];
-                                    if (repo.hasOwnProperty('patterns') &&
-                                            !repo.hasOwnProperty('match') &&
-                                            !repo.hasOwnProperty('begin')) {
-                                        _(repo.patterns).each(function(v, i){
-                                            if (v._processed) _.breakLoop();
-                                            v._path = repoName + '@' + i;
-                                            v._processed = true;
-                                        });
-                                        return repo.patterns;
-                                    } else {
+                        if (pattern.hasOwnProperty('patterns')) {
+                            var subpatterns = _(pattern.patterns).chain().map(function(pattern, index){
+                                if (pattern.hasOwnProperty('include')) {
+                                    if (pattern.include == '$base' || pattern.include == '$self')
+                                        return this.patterns;
+                                    else {
+                                        var repoName = pattern.include.substring(1);
+                                        var repo = this.repositories[repoName];
+                                        if (!repo._processed) {
+                                            if (repo.hasOwnProperty('patterns')) {
+                                                _(repo.patterns).each(function(v, i){
+                                                    v._path = repoName + '@' + i;
+                                                });
+                                            }
+                                            repo._processed = true;
+                                        }
+                                        
+                                        if (repo.hasOwnProperty('patterns') &&
+                                                    !repo.hasOwnProperty('match') &&
+                                                    !repo.hasOwnProperty('begin')) {
+                                            return repo.patterns;
+                                        } else {
+                                            repo._path = repoName + '@';
+                                        }
                                         return repo;
                                     }
+                                } else {
+                                    if (!pattern._processed) {
+                                        pattern._path = '[' + index + ']';
+                                        pattern._processed = true;
+                                    }
+                                    return pattern;
                                 }
-                            } else {
-                                return pattern;
-                            }
-                        }, this).flatten().value();
-                        result = this._processPatterns(subpatterns, seg, token);
+                            }, this).flatten().value();
+                            result = this._processPatterns(subpatterns, seg, token);
+
+                        } else if (pattern.hasOwnProperty('contentName')) {
+                            token.end = seg.col + (match ? match.index : seg.str.length);
+                            token.tag = pattern.contentName;
+                            result = { state: seg.fullState, token: token };
+                        }
                     }
                 } else {
                     console.error('no end regex found for nested state: ' + JSON.stringify(pattern));
@@ -440,6 +442,26 @@ exports.TextmateSyntax.prototype = {
         }
 
         return result;
+    },
+
+    _lookupPattern:function(state) {
+        var patternPath = state.current().split('@');
+        if (patternPath.length > 1) { // repository pattern
+            var repo = this.repositories[patternPath[0]];
+            return (patternPath[1] == '') ? repo : repo.patterns[Number(patternPath[1])];
+        }
+        
+        var arrayMatch = patternPath[0].match(/^(.*?)\[(\d+)\]/);
+        if (arrayMatch) {
+            if (arrayMatch[1] == '') {
+                var parentPattern = this._lookupPattern(state.parent());
+                return parentPattern.patterns[arrayMatch[2]];
+            } else {
+                return this._lookups[arrayMatch[1]][Number(arrayMatch[2])];
+            }
+        }
+
+        return this._lookups[patternPath[0]];
     },
 
     _closestStartPattern:function(patterns, seg) {
@@ -509,13 +531,12 @@ exports.TextmateSyntax.prototype = {
     
                 var match = regex.exec(seg.str);
                 if (match == null || match.index > seg.wordBegin) return;
-                
                 //console.debug('  > begin: ' + JSON.stringify(pattern));
                 
                 var nextState = null;
                 if (pattern.hasOwnProperty('beginCaptures')) {
                     var capturesResult = this._setupCaptures(pattern, 'beginCaptures', match, seg, token);
-                    nextState = this._nextState(pattern, pattern.name, seg);
+                    nextState = this._nextState(pattern, seg);
                     if (capturesResult.nextState.isCaptureState()) {
                         nextState = nextState.nextState(capturesResult.nextState.current());
                     }
@@ -530,7 +551,7 @@ exports.TextmateSyntax.prototype = {
                         token.tag = pattern.name;
                     }
 
-                    nextState = this._nextState(pattern, pattern.name, seg);
+                    nextState = this._nextState(pattern, seg);
                 }
 
                 result = { state: [ seg.context, nextState.toString() ], token: token };
@@ -554,8 +575,19 @@ exports.TextmateSyntax.prototype = {
             return pattern[value] = new RegExp2(val);
     },
 
-    _nextState:function(pattern, name, segment) {
-        return segment.state.nextState(pattern.hasOwnProperty('_path') ? pattern._path : name);
+    _nextState:function(pattern, segment) {
+        var nxt = '';
+        if (pattern.hasOwnProperty('_path')) {
+            nxt = pattern._path;
+
+        } else if (pattern.hasOwnProperty('name')) {
+            nxt = pattern.name;
+
+        } else {
+            throw new Error('unknown next state: ' + JSON.stringify(pattern));
+        }
+        
+        return segment.state.nextState(nxt);
     },
 
     _setupCaptures:function(pattern, capturesName, match, segment, token) {
